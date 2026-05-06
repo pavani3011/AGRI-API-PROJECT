@@ -2,4 +2,10 @@ data/
 __pycache__/
 outputs/
 *.zip
-notebooks/
+
+# Ignore Jupyter notebook checkpoints
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# Ignore all Jupyter Notebooks
+*.ipynb
