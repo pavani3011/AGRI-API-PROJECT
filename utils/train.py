@@ -8,10 +8,11 @@ from config import (
     CROP_MODEL_PATH, PARAM_GRID,
     RANDOM_STATE, CV_FOLDS
 )
-from utils.preprocess import load_and_split
-from config import CNN_CONFIG
+from utils.preprocess import load_and_split , get_dataloaders
+# from config import CNN_CONFIG
 import torch, torch.nn as nn
 from torchvision import models
+from pathlib import Path
 
 def build_pipeline():
     #return an untrained imbalanced pipeline
@@ -61,49 +62,148 @@ def train(X_train, y_train):
     }
 
 # #Cnn training loop
-# def get_model(inpt_size,num_classes):
-#     model= nn.Sequential(
-#         nn.Linear(inpt_size,64),
-#         nn.ReLU(),
-#         nn.Linear(64,32),
-#         nn.ReLU(),
-#         nn.Linear(32,num_classes)
-#     )
-#     return model
+device = (
+    "cuda" if torch.cuda.is_available()
+    else "mps" if torch.backends.mps.is_available()
+    else "cpu"
+)
 
-# def train_cnn(X_train, X_test , y_train, y_test):
-#     cfg = CNN_CONFIG
-#     input_dim = X_train.shape[1]
-#     model = get_model(input_dim,cfg["num_classes"]).to(cfg["device"])
+def build_model(num_classes, use_pretrained=True):
+    model = models.resnet18(weights = "IMAGENET1K_V1" if use_pretrained else None)
 
-#     X_train_t = torch.tensor(X_train.values, dtype= torch.float32).to(cfg["device"])
-#     y_train_t = torch.tensor(y_train, dtype= torch.long).to(cfg["device"])
-#     X_test_t = torch.tensor(X_test.values, dtype= torch.float32).to(cfg["device"])
-#     y_test_t = torch.tensor(y_test, dtype= torch.long).to(cfg["device"])
+    if use_pretrained:
+        for param in model.parameters():
+            param.requires_grad = False
 
-#     criterion = nn.CrossEntropyLoss()
-#     optimizer = torch.optim.Adam(model.parameters(), lr = cfg["learning_rate"])
+    model.fc = nn.Sequential(
+        nn.Linear(model.fc.in_features, 256),
+        nn.ReLU(),
+        nn.Dropout(0.3),
+        nn.Linear(256,num_classes)
+    )
+    return model.to(device)
 
-#     for epoch in range(1,51):
-#         model.train()
-#         pred = model(X_train_t)
-#         loss= criterion(pred,y_train_t)
-#         optimizer.zero_grad()
-#         loss.backward()
-#         optimizer.step()
+def build_custom_cnn(num_classes):
+    model = nn.Sequential(
+        #block 1
+        nn.Conv2d(3,32, kernel_size=3, padding= 1),
+        nn.BatchNorm2d(32),
+        nn.ReLU(),
+        nn.MaxPool2d(2),
 
-#         if epoch % 10 == 0:
-#             model.eval()
-#             with torch.no_grad():
-#                 acc = (model(X_test_t).argmax(1)== y_test_t).float().mean()
-#             print(f"epoch {epoch:3d} || loss : {loss:.4f} || acc : {acc:.2%}")
+        #block 2
+        nn.Conv2d(32,64, kernel_size=3, padding= 1),
+        nn.BatchNorm2d(64),
+        nn.ReLU(),
+        nn.MaxPool2d(2),
 
-#     torch.save(model.state_dict(), cfg['model_save_path'])
-#     print("Saved to", cfg["model_save_path"])
+        #block 3
+        nn.Conv2d(64,128, kernel_size=3, padding= 1),
+        nn.BatchNorm2d(128),
+        nn.ReLU(),
+        nn.MaxPool2d(2),
 
+        # classifier head
+        nn.Flatten(),
+        nn.Linear(128*16*16, 512),
+        nn.ReLU(),
+        nn.Dropout(0.4),
+        nn.Linear(512, num_classes)
+        
+    )
+    return model.to(device)
+
+#training loop
+def train_cnn(model, train_loader, val_loader, epochs=20, lr=0.001):
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(
+        filter(lambda p : p.requires_grad, model.parameters()), lr = lr
+    )
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
+
+    best_val_acc = 0.0
+    history = {"train_loss": [], "val_acc": []}
+
+    for epoch in range(1, epochs + 1):
+
+        # train phase
+        model.train()
+        running_loss = 0.0
+
+        for imgs, labels in train_loader:
+            imgs = imgs.to(device)
+            labels = labels.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(imgs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+            running_loss+= loss.item()
+
+        avg_loss = running_loss/len(train_loader)
+
+        #val phase 
+        model.eval()
+        correct = total = 0
+
+        with torch.no_grad():
+            for imgs, labels in val_loader:
+                imgs = imgs.to(device)
+                labels = labels.to(device)
+                preds = model(imgs).argmax(dim = 1)
+                correct += (preds == labels).sum().item()
+                total += labels.size(0)
+
+        val_acc = correct/total
+        scheduler.step()
+
+        history["train_loss"].append(avg_loss)
+        history["val_acc"].append(val_acc)
+
+        print(f" epoch {epoch:3d}/{epochs} | "
+              f"loss: {avg_loss:.4f} | "
+              f"val acc: {val_acc:.2%}")
+        
+        #save best model
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            save_path = Path("models/disease_model.pth")
+            save_path.parent.mkdir(exist_ok=True)
+            torch.save({
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "val_acc": val_acc,
+                "classes": train_loader.dataset.classes,
+            }, save_path)
+            print(f" saved best model (val_acc ={val_acc:.2%})")
+    print(f"\nTraining complete. best val acc : {best_val_acc:.2%}")
+    return history
+
+# unfreeze all layers for fine-tuning
+def unfreeze_model(model):
+    for param in model.parameters():
+        param.requires_grad = True
+    return model
+
+#model point      
 if __name__ == "__main__":
     X_train, X_test , y_train, y_test, le = load_and_split()
 
     train(X_train, y_train)
 
-    # train_cnn(X_train, X_test , y_train, y_test)
+    train_loader , val_loader , classes = get_dataloaders()
+    num_classes = len(classes)
+    print(f"Training on {device} | Classes: {num_classes}")
+
+    #Phase 1: train only the head (5 epochs)
+    model = build_model(num_classes, use_pretrained=True)
+    history = train_cnn(model, train_loader, val_loader, epochs=5, lr= 0.001)
+
+    #Phase 2: unfreeze and fine-tune all layers (15 more epochs)
+    model = unfreeze_model(model)
+    history2 = train_cnn(model,train_loader, val_loader, epochs=15, lr = 0.0001)
+
+
+    
