@@ -32,23 +32,23 @@ PARAM_GRID ={
     "smote__k_neighbors": [3,5],
 }
 
-# # ---CNN config---
-# CNN_CONFIG = {
-#     #data
-#     "data_dir": "../data/plant_village",
-#     "img_size": 128,
-#     "num_classes": 38,
+# ---CNN config---
+CNN_CONFIG = {
+    #data
+    "data_dir": DATA_DIR/"plant_village",
+    "img_size": 128,
+    "num_classes": 38,
 
-#     #training
-#     "batch_size": 32,
-#     "epochs": 20,
-#     "learning_rate": 0.001,
+    #training
+    "batch_size": 32,
+    "epochs": 20,
+    "learning_rate": 0.001,
 
-#     #paths
-#     "model_save_path": "models/disease_model.pth",
-#     "device":(
-#         "cuda" if torch.cuda.is_available()
-#         else "mps" if torch.backends.mps.is_available()
-#         else "cpu"
-#     )
-# }
+    #paths
+    "model_save_path": MODEL_DIR/"disease_model.pth",
+    "device":(
+        "cuda" if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available()
+        else "cpu"
+    )
+}

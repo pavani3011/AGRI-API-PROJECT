@@ -9,7 +9,7 @@ from config import (
     RANDOM_STATE, CV_FOLDS
 )
 from utils.preprocess import load_and_split , get_dataloaders
-# from config import CNN_CONFIG
+from config import CNN_CONFIG
 import torch, torch.nn as nn
 from torchvision import models
 from pathlib import Path
@@ -62,11 +62,7 @@ def train(X_train, y_train):
     }
 
 # #Cnn training loop
-device = (
-    "cuda" if torch.cuda.is_available()
-    else "mps" if torch.backends.mps.is_available()
-    else "cpu"
-)
+device = CNN_CONFIG["device"]
 
 def build_model(num_classes, use_pretrained=True):
     model = models.resnet18(weights = "IMAGENET1K_V1" if use_pretrained else None)
@@ -114,7 +110,7 @@ def build_custom_cnn(num_classes):
     return model.to(device)
 
 #training loop
-def train_cnn(model, train_loader, val_loader, epochs=20, lr=0.001):
+def train_cnn(model, train_loader, val_loader,classes, epochs=20, lr=0.001):
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(
         filter(lambda p : p.requires_grad, model.parameters()), lr = lr
@@ -169,13 +165,13 @@ def train_cnn(model, train_loader, val_loader, epochs=20, lr=0.001):
         #save best model
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            save_path = Path("models/disease_model.pth")
+            save_path = Path(CNN_CONFIG["model_save_path"])
             save_path.parent.mkdir(exist_ok=True)
             torch.save({
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
                 "val_acc": val_acc,
-                "classes": train_loader.dataset.classes,
+                "classes": classes,
             }, save_path)
             print(f" saved best model (val_acc ={val_acc:.2%})")
     print(f"\nTraining complete. best val acc : {best_val_acc:.2%}")
@@ -190,7 +186,7 @@ def unfreeze_model(model):
 #model point      
 if __name__ == "__main__":
     X_train, X_test , y_train, y_test, le = load_and_split()
-
+    
     train(X_train, y_train)
 
     train_loader , val_loader , classes = get_dataloaders()
@@ -199,11 +195,11 @@ if __name__ == "__main__":
 
     #Phase 1: train only the head (5 epochs)
     model = build_model(num_classes, use_pretrained=True)
-    history = train_cnn(model, train_loader, val_loader, epochs=5, lr= 0.001)
+    history = train_cnn(model, train_loader, val_loader,classes, epochs=5, lr= 0.001)
 
     #Phase 2: unfreeze and fine-tune all layers (15 more epochs)
     model = unfreeze_model(model)
-    history2 = train_cnn(model,train_loader, val_loader, epochs=15, lr = 0.0001)
+    history2 = train_cnn(model,train_loader, val_loader,classes, epochs=15, lr = 0.0001)
 
 
     
